@@ -126,7 +126,7 @@ Batch container that:
 |----------|----------|-------------|
 | `GCS_BUCKET_NAME` | Yes | e.g. `lyfedge-rag-sync-bucket` |
 | `GEMINI_API_KEY` | Yes | Gemini Developer API key |
-| `FILE_SEARCH_STORE_DISPLAY_NAME` | No | Default in code: `Gemini File Search demo` — **set explicitly** to match `config.py` / Cloud Run service (e.g. `rag-filesearch-demo`) |
+| `FILE_SEARCH_STORE_DISPLAY_NAME` | No | Default: **`Gemini File Search demo`** — same as `config.py` / Cloud Run **service** (override only if you want a different store). |
 
 **Authentication:** The job uses **API key** for Gemini and the **metadata server / ADC** for GCS via `google-cloud-storage` — run it with a **service account** that has GCS access on the bucket (Cloud Run Job default SA or a dedicated SA).
 
@@ -168,7 +168,7 @@ gcloud run jobs create "$JOB_NAME" \
   --image="$REPO" \
   --region="$REGION" \
   --service-account="$SYNC_SA" \
-  --set-env-vars="GCS_BUCKET_NAME=${BUCKET},FILE_SEARCH_STORE_DISPLAY_NAME=rag-filesearch-demo" \
+  --set-env-vars="GCS_BUCKET_NAME=${BUCKET},FILE_SEARCH_STORE_DISPLAY_NAME=Gemini File Search demo" \
   --set-secrets="GEMINI_API_KEY=gemini-api-key:latest" \
   --max-retries=1 \
   --task-timeout=30m
@@ -253,7 +253,7 @@ gcloud run deploy gemini-file-search-demo \
   --region=asia-south2 \
   --allow-unauthenticated \
   --ingress=internal-and-cloud-load-balancing \
-  --set-env-vars="GEMINI_API_KEY=YOUR_API_KEY_HERE,FILE_SEARCH_STORE_DISPLAY_NAME=rag-filesearch-demo"
+  --set-env-vars="GEMINI_API_KEY=YOUR_API_KEY_HERE,FILE_SEARCH_STORE_DISPLAY_NAME=Gemini File Search demo"
 ```
 
 Use **Secret Manager** for `GEMINI_API_KEY` in production. Keep **`FILE_SEARCH_STORE_DISPLAY_NAME`** aligned with the **GCS sync job** so both target the same logical store.

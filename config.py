@@ -16,8 +16,9 @@ class Config:
     FILE_SEARCH_STORE_NAME = os.getenv("FILE_SEARCH_STORE_NAME", "").strip()
 
     # When creating or discovering a store, this display name is used.
+    # Must match gcs-sync-job/sync_job.py default so service + job share one store.
     FILE_SEARCH_STORE_DISPLAY_NAME = os.getenv(
-        "FILE_SEARCH_STORE_DISPLAY_NAME", "rag-filesearch-demo"
+        "FILE_SEARCH_STORE_DISPLAY_NAME", "Gemini File Search demo"
     )
 
     # Persist discovered store name locally (gitignored) for dev restarts.
