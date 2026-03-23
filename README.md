@@ -1,102 +1,178 @@
 # Gemini File Search RAG Demo
 
-Self-contained demo that mirrors the **Vertex AI RAG** UI style, but uses **[Gemini File Search](https://ai.google.dev/gemini-api/docs/file-search)** so Google handles **import, chunking, embedding, and retrieval**—no Firestore, GCS pipeline, or custom vector code.
+A complete, self-contained demonstration of building a **Retrieval-Augmented Generation (RAG)** application leveraging the **[Gemini File Search API](https://ai.google.dev/gemini-api/docs/file-search)** and deploying it securely on Google Cloud.
+
+## 🧠 What is Gemini File Search?
+
+Typically, building a RAG application requires immense effort:
+1. **Parsing & OCR:** Extracting text from PDFs, Word docs, and Markdown.
+2. **Chunking:** Writing custom logic to split large documents into overlapping semantic blocks.
+3. **Embeddings:** Passing those chunks through an embedding model to convert them into vectors.
+4. **Vector Database:** Provisioning and managing a custom database (like Pinecone, Weaviate, or Firestore Vector Search) to store the embeddings.
+5. **Retrieval Logic:** Writing code to calculate cosine similarity and manually retrieve the top-K chunks to inject into your LLM prompt.
+
+**Gemini File Search handles *all* of the above behind the scenes!** 
+You simply upload your raw documents (PDF, Office, TXT, CSV) to a `fileSearchStore`. When you query the Gemini model, you pass the store's name as a tool. Google automatically chunks, embeds, indexes, retrieves, and returns the exact answer alongside source citations and grounding metadata.
+
+---
 
 ## 🏗 System Architecture
 
-The following diagram illustrates how the components of this application interact with each other and the Google Gemini API to provide a seamless Retrieval-Augmented Generation (RAG) experience.
+The following diagram illustrates how the system operates, including the **Google Cloud Run** deployment secured by **Identity-Aware Proxy (IAP)**.
 
 ```mermaid
 graph TD
     classDef user fill:#6366f1,stroke:#4338ca,color:white,stroke-width:2px;
-    classDef app fill:#10b981,stroke:#047857,color:white,stroke-width:2px;
-    classDef gcp fill:#f59e0b,stroke:#b45309,color:white,stroke-width:2px;
+    classDef gcpApp fill:#10b981,stroke:#047857,color:white,stroke-width:2px;
+    classDef gcpInfra fill:#f59e0b,stroke:#b45309,color:white,stroke-width:2px;
+    classDef gcpAi fill:#ec4899,stroke:#b45309,color:white,stroke-width:2px;
 
-    User((User / Web Browser)):::user
-    UI[HTML Frontend UI]:::app
-    FastAPI[FastAPI Backend\nmain.py]:::app
-    FSS[FileSearchRAG Service\nfile_search_service.py]:::app
+    User((User / Browser)):::user
+    
+    subgraph Google Cloud Architecture
+        IAP[Identity-Aware Proxy\nOAuth Auth Check]:::gcpInfra
+        LB[Global External\nApplication Load Balancer]:::gcpInfra
+        NEG[Serverless NEG]:::gcpInfra
+        
+        subgraph Cloud Run Service
+            FastAPI[FastAPI Backend\nmain.py]:::gcpApp
+            FSS[FileSearchRAG Service\nfile_search_service.py]:::gcpApp
+        end
+    end
 
-    GeminiAPI{Google Gemini API}:::gcp
-    VectorStore[(Gemini File Search Store)]:::gcp
-    LLM[Gemini 2.5 Flash Model]:::gcp
+    subgraph Gemini Managed Services
+        GeminiAPI{Google GenAI SDK}:::gcpAi
+        VectorStore[(File Search Store\nManaged Vector DB)]:::gcpAi
+        LLM[Gemini 2.5 Flash]:::gcpAi
+    end
 
-    User -->|Interacts with UI| UI
-    UI -->|POST /api/v1/upload| FastAPI
-    UI -->|POST /api/v1/query| FastAPI
+    User -->|HTTPS Request| LB
+    LB -->|Intercept via OAuth| IAP
+    IAP -->|Authorized? Yes| NEG
+    NEG -->|Routes internally| FastAPI
     
     FastAPI -->|Routes File/Query| FSS
     
-    FSS -.->|upload_to_file_search_store| VectorStore
-    FSS -.->|generate_content + file_search tool| GeminiAPI
+    FSS -.->|upload_to_file_search_store\nUploads PDF/TXT| VectorStore
+    FSS -.->|generate_content +\nFile Search Tool| GeminiAPI
     
-    GeminiAPI <-->|Retrieves Chunks| VectorStore
+    GeminiAPI <-->|Managed Retrieval| VectorStore
     GeminiAPI <-->|Augments Prompt| LLM
     
     GeminiAPI -.->|Returns Answer & Citations| FSS
     FSS -->|JSON Response| FastAPI
-    FastAPI -->|Displays Answer| UI
 ```
+
+---
 
 ## 📁 File Structure & Explanations
 
 Here is a breakdown of what each critical file in this repository does:
 
-- **`main.py`**: The entry point of the application. It initializes the FastAPI server and serves the HTML frontend (which is embedded directly in this file). It defines the API routes (`/health`, `/api/v1/status`, `/api/v1/upload`, `/api/v1/query`) and handles incoming HTTP requests, validating inputs before passing them to the service layer.
-- **`file_search_service.py`**: The core backend logic. Contains the `FileSearchRAG` wrapper class which interacts directly with the `google-genai` Python SDK. It handles:
-  - Creating or reusing a File Search Store (`ensure_store`).
-  - Directly uploading documents to the vector store (`upload_to_file_search_store`).
-  - Executing LLM queries with the `file_search` tool enabled, and parsing out the resulting answers, citations, and grounding metadata.
-- **`config.py`**: The configuration module. It centrally manages environment variables (like `GEMINI_API_KEY`, `FILE_SEARCH_STORE_NAME`, and `GEMINI_MODEL`) and defines the list of allowed file extensions (`ALLOWED_EXTENSIONS`) to ensure unsupported files (like images) aren't uploaded to the vector store.
-- **`Dockerfile`**: Contains instructions for containerizing the application. Useful for deploying the app to Google Cloud Run or any other container platform. It uses a lightweight Python 3.11 image and exposes port 8080.
-- **`requirements.txt`**: Declares the Python dependencies (`fastapi`, `uvicorn`, `python-multipart`, and `google-genai`).
+- **`main.py`**: The entry point of the application. Initializes the **FastAPI** server and serves the HTML frontend (which is embedded directly inside). It exposes the API routes (`/health`, `/api/v1/upload`, `/api/v1/query`) and translates web requests to backend service calls.
+- **`file_search_service.py`**: The core AI logic. Contains the `FileSearchRAG` class which interacts directly with the `google-genai` Python SDK. It handles:
+  - Creating or reusing the vector storage (`ensure_store`).
+  - Securely dispatching documents into Google's processing pipeline (`upload_to_file_search_store`).
+  - Executing LLM queries with the `file_search` tool enabled, and parsing out answers and citations.
+- **`config.py`**: A configuration module that securely imports environment variables (like `GEMINI_API_KEY` and `FILE_SEARCH_STORE_NAME`) and maintains `ALLOWED_EXTENSIONS` (ensuring invalid files like images are rejected early).
+- **`Dockerfile`**: Instructions for containerizing the application using a lightweight Python 3.11 image, ready for Google Cloud Run.
+- **`requirements.txt`**: Python dependencies (`fastapi`, `uvicorn`, `python-multipart`, and `google-genai`).
 
-## 🚀 Quick start (local)
+---
+
+## 🚀 Local Deployment / Usage
+
+To run the application on your computer for testing:
 
 ```bash
-cd RAG-FileSearch-Demo
+# 1. Setup python virtual environment
 python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-# Always install with the venv’s Python (not global pyenv) so google-genai matches `python main.py`
+source .venv/bin/activate
+
+# 2. Install dependencies
 python -m pip install -U -r requirements.txt
 
-export GEMINI_API_KEY="your-key"   # AI Studio / Google AI
-# optional:
-# export GEMINI_MODEL="gemini-2.5-flash"
-# export FILE_SEARCH_STORE_NAME="fileSearchStores/..."  # pin an existing store
-# export FILE_SEARCH_STORE_DISPLAY_NAME="my-demo-store"    # reuse by display name
+# 3. Export your Google Gemini API Key
+export GEMINI_API_KEY="your-api-key-here"
 
+# 4. Start the server
 python main.py
 ```
 
-Open **http://127.0.0.1:8080** — upload files, then ask questions. Citations / grounding metadata appear in the UI when the API returns them.
+Open **http://127.0.0.1:8080** in your browser.
 
-## 🛠 Troubleshooting
+---
 
-- **`Requested entity was not found` / `404 NOT_FOUND` on Upload** — Gemini File Search only supports text-based documents (PDF, TXT, DOCX, CSV, MD). Attempting to upload image files to the File Search endpoint will result in a 404 error from the Google backend. Ensure you only upload supported documents.
-- **`importFile` / upload returns `404 NOT_FOUND` while `fileSearchStores.get` is `200`** — The demo now utilizes `upload_to_file_search_store` to bypass the deprecated two-step `Files API upload -> importFile` pipeline which often failed with 404s.
-- **`AttributeError: 'Client' object has no attribute 'file_search_stores'`** — Your `google-genai` install is older than **1.49.0**. Reinstall deps **using the same Python that runs the app** (common mistake: upgrading pyenv global while the app uses `.venv`).
-- **`ResolutionImpossible` / `anyio` conflict** — Old FastAPI (0.104.x) required `anyio<4`, but `google-genai>=1.49` needs `anyio>=4.8`. This repo pins **FastAPI ≥ 0.115** so both resolve; run `pip install -U -r requirements.txt` again.
+## ☁️ Cloud Deployment (Cloud Run + IAP)
 
-## ☁️ Cloud Run Deployment
+Running this publicly requires securing it. By utilizing **Identity-Aware Proxy (IAP)**, you ensure that only authorized users (authenticated via their Google Account) can access your Cloud Run instance. 
 
-File Search in the Python SDK is wired to the **Gemini Developer API** (API key), not Vertex. Deploy like any other container; **inject the key** via Secret Manager or `--set-secrets`:
-
+### Step 1: Deploy to Cloud Run
+Deploy the application, restricting access so it can **only** be reached from a load balancer:
 ```bash
 gcloud run deploy gemini-file-search-demo \
   --source . \
-  --region=us-central1 \
+  --region=asia-south2 \
   --allow-unauthenticated \
-  --set-secrets=GEMINI_API_KEY=YOUR_SECRET:latest
+  --ingress=internal-and-cloud-load-balancing \
+  --set-env-vars="GEMINI_API_KEY=YOUR_API_KEY_HERE"
 ```
 
-*(If you ever wish to place this behind IAP for production so only authorized users can access it, you will need to setup a Global External Application Load Balancer and Serverless NEGs).*
+### Step 2: Provision Load Balancer Infrastructure
+To put IAP in front of Cloud Run, you must build a Global External HTTPS Load Balancer using a **Serverless Network Endpoint Group (NEG)**.
 
-## 🔌 API
+```bash
+IP_ADDRESS="34.149.147.50" # Replace with a static IP you reserve via GCP
+DOMAIN="${IP_ADDRESS}.nip.io"
+REGION="asia-south2"
 
-- `GET /health` — liveness  
-- `GET /api/v1/status` — key configured, model name  
-- `POST /api/v1/upload` — multipart `file`  
-- `POST /api/v1/query` — JSON `{"query": "..."}`  
+# Create the NEG routing traffic to Cloud Run
+gcloud compute network-endpoint-groups create demo-neg \
+    --region=$REGION \
+    --network-endpoint-type=serverless  \
+    --cloud-run-service=gemini-file-search-demo
 
-Interactive docs: `/docs`
+# Create the Backend Service
+gcloud compute backend-services create demo-backend \
+    --global \
+    --load-balancing-scheme=EXTERNAL_MANAGED
+
+# Attach NEG to Backend
+gcloud compute backend-services add-backend demo-backend \
+    --global \
+    --network-endpoint-group=demo-neg \
+    --network-endpoint-group-region=$REGION
+
+# Routing, Target Proxies, and SSL Certs (Required for IAP)
+gcloud compute url-maps create demo-url-map --default-service demo-backend
+gcloud compute ssl-certificates create demo-cert --domains=$DOMAIN --global
+gcloud compute target-https-proxies create demo-https-proxy --url-map=demo-url-map --ssl-certificates=demo-cert
+gcloud compute forwarding-rules create demo-https-rule --load-balancing-scheme=EXTERNAL_MANAGED --network-tier=PREMIUM --address=$IP_ADDRESS --target-https-proxy=demo-https-proxy --global --ports=443
+```
+
+### Step 3: Enable IAP
+
+First, ensure you have configured an **OAuth Consent Screen** and an **OAuth Web Application Client ID** in Google Cloud Console. Then, enable IAP on your load balancer's backend.
+
+```bash
+# Provide the Client ID / Secret and enable IAP
+gcloud compute backend-services update demo-backend \
+    --global \
+    --iap=enabled,oauth2-client-id="YOUR_CLIENT_ID",oauth2-client-secret="YOUR_CLIENT_SECRET"
+
+# Give the IAP proxy permission to "Invoke" your internal Cloud Run service
+gcloud beta services identity create --service=iap.googleapis.com --project=YOUR_PROJECT_ID
+gcloud run services add-iam-policy-binding gemini-file-search-demo \
+    --region=$REGION \
+    --member="serviceAccount:service-YOUR_PROJECT_NUMBER@gcp-sa-iap.iam.gserviceaccount.com" \
+    --role="roles/run.invoker"
+
+# Grant yourself permission to pass through the IAP wall
+gcloud iap web add-iam-policy-binding \
+    --resource-type=backend-services \
+    --service=demo-backend \
+    --member="user:your-email@gmail.com" \
+    --role="roles/iap.httpsResourceAccessor"
+```
+
+Wait up to 30 minutes for the managed SSL certificate to become active, then navigate to your mapped domain (`https://[IP].nip.io`). You will be prompted with a Google Login before safely accessing your app!
