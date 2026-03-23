@@ -1,0 +1,6 @@
+# google-genai>=1.49 needs anyio>=4.8; FastAPI 0.104 pins anyio<4 — use 0.115+
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.9
+# File Search APIs require google-genai >= 1.49.0
+google-genai>=1.49.0
