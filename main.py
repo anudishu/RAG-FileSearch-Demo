@@ -1,6 +1,6 @@
 """
-Gemini File Search RAG demo — FastAPI UI + API.
-Managed chunking, embeddings, and retrieval via Gemini File Search (Developer API).
+Intelligent Document Q&A using Gemini File Search — FastAPI UI + API.
+No custom vector-embedding pipelines to build; upload documents and ask questions (Developer API).
 """
 
 from contextlib import asynccontextmanager
@@ -19,13 +19,13 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Gemini File Search demo — GET /  POST /api/v1/upload  POST /api/v1/query")
+    logger.info("Intelligent Document Q&A — GET /  POST /api/v1/upload  POST /api/v1/query")
     yield
 
 
 app = FastAPI(
-    title="Gemini File Search RAG Demo",
-    description="RAG using Gemini File Search (managed indexing)",
+    title="Intelligent Document Q&A (Gemini File Search)",
+    description="Document Q&A without building your own vector embedding stack — indexing and retrieval via Gemini File Search",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -64,7 +64,7 @@ FRONTEND_HTML = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gemini File Search — RAG Demo</title>
+    <title>Intelligent Document Q&amp;A · Gemini File Search</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         :root {
@@ -359,19 +359,19 @@ FRONTEND_HTML = """<!DOCTYPE html>
     <div id="configBanner"></div>
     <header>
         <div class="header-content">
-            <div class="logo">File Search RAG</div>
+            <div class="logo">Document Q&amp;A</div>
             <div class="status">
                 <div class="status-indicator"></div>
-                <span>Gemini API • Managed indexing</span>
+                <span>Gemini File Search • No custom embedding pipeline</span>
             </div>
         </div>
     </header>
     <div class="container">
         <div class="hero">
-            <h1>Gemini File Search Demo</h1>
-            <p>Upload documents and images — Google chunks, embeds, and indexes for semantic RAG.</p>
-            <p style="font-size:15px;opacity:0.9">No Firestore, no custom vector DB, no manual chunking pipeline.</p>
-            <div class="hero-badge">✨ Powered by Gemini File Search + gemini-2.5-flash</div>
+            <h1>Intelligent Document Q&amp;A using Gemini File Search</h1>
+            <p>Ask questions in plain language and get answers grounded in <em>your</em> documents — without standing up chunking, embedding models, or a separate vector database.</p>
+            <p style="font-size:15px;opacity:0.9"><strong>No more complicated vector-embedding work:</strong> File Search handles indexing and retrieval so your team focuses on content and outcomes.</p>
+            <div class="hero-badge">Google Gemini · Managed File Search (not DIY vectors)</div>
         </div>
         <div class="grid">
             <div class="card">
@@ -425,7 +425,7 @@ FRONTEND_HTML = """<!DOCTYPE html>
             <a href="/docs" target="_blank" rel="noopener">OpenAPI /docs</a>
             <a href="https://ai.google.dev/gemini-api/docs" target="_blank" rel="noopener">Gemini API</a>
         </div>
-        <p>Gemini File Search RAG demo — for presentation and testing</p>
+        <p>Intelligent Document Q&amp;A using Gemini File Search — reference solution for demos and pilots</p>
     </footer>
     <script>
         const API = '/api/v1';
@@ -568,7 +568,7 @@ def root():
 @app.get("/api/v1/status")
 def api_status():
     return {
-        "service": "gemini-file-search-rag-demo",
+        "service": "intelligent-document-qa",
         "api_key_configured": api_configured(),
         "model": Config.GEMINI_MODEL,
         "file_search_store_env": bool(Config.FILE_SEARCH_STORE_NAME),

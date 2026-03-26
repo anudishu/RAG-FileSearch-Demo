@@ -1,6 +1,6 @@
-# Gemini File Search RAG Demo
+# Intelligent Document Q&A using Gemini File Search
 
-A complete, self-contained demonstration of building a **Retrieval-Augmented Generation (RAG)** application leveraging the **[Gemini File Search API](https://ai.google.dev/gemini-api/docs/file-search)** and deploying it securely on Google Cloud.
+**No complicated vector-embedding stack to build or run.** This reference app delivers **question answering over your own documents**: upload files (or sync from Cloud Storage), ask in natural language, and get **answers grounded in that content** via the **[Gemini File Search API](https://ai.google.dev/gemini-api/docs/file-search)** — plus a **Google Cloud** deployment path for the UI and batch sync.
 
 ## 🧠 What is Gemini File Search?
 
@@ -26,49 +26,11 @@ This repo supports **two ways** to get documents into the same File Search store
 | **FastAPI UI / API** (`main.py`) | Interactive upload for demos and ad-hoc files. |
 | **GCS → Cloud Run Job** (`gcs-sync-job/`) | Batch / scheduled sync from a canonical bucket into File Search (embeddings & indexing). |
 
-The diagram below includes the **GCS sync bucket**, **Cloud Run Job**, and optional **Cloud Scheduler**. IAP + Load Balancer remain the pattern for locking down the web UI.
+The diagram below is the **end-to-end reference architecture**: Terraform / GitHub for infra and CI/CD (Artifact Registry → Cloud Run), user traffic through **Load Balancer** (with **Cloud Armor**), the **Cloud Run** web app for uploads and queries, **Cloud Scheduler** driving the **Cloud Run Job** for GCS ingestion, and **Gemini / File Search** for managed indexing and answers.
 
-```mermaid
-graph TD
-    classDef user fill:#6366f1,stroke:#4338ca,color:white,stroke-width:2px;
-    classDef gcpApp fill:#10b981,stroke:#047857,color:white,stroke-width:2px;
-    classDef gcpInfra fill:#f59e0b,stroke:#b45309,color:white,stroke-width:2px;
-    classDef gcpAi fill:#ec4899,stroke:#be185d,color:white,stroke-width:2px;
+![Intelligent Document Q&A using Gemini File Search — system architecture](docs/architecture-intelligent-document-qa.png)
 
-    User((User / Browser)):::user
-
-    subgraph Google Cloud
-        IAP[Identity-Aware Proxy]:::gcpInfra
-        LB[HTTPS Load Balancer]:::gcpInfra
-        NEG[Serverless NEG]:::gcpInfra
-
-        subgraph Cloud Run Service
-            FastAPI[FastAPI + UI\nmain.py]:::gcpApp
-            FSS[FileSearchRAG\nfile_search_service.py]:::gcpApp
-        end
-
-        GCS[(GCS bucket\nlyfedge-rag-sync-bucket)]:::gcpInfra
-        Scheduler[Cloud Scheduler]:::gcpInfra
-        Job[Cloud Run Job\ngcs-sync-job]:::gcpApp
-    end
-
-    subgraph Gemini
-        GenAI[Google GenAI SDK]:::gcpAi
-        Store[(File Search store)]:::gcpAi
-        LLM[Gemini model]:::gcpAi
-    end
-
-    User --> LB --> IAP --> NEG --> FastAPI
-    FastAPI --> FSS
-    FSS -->|upload_to_file_search_store\n+ queries| GenAI
-    GenAI <-->|managed RAG| Store
-    GenAI --> LLM
-
-    Scheduler -->|HTTP: run job| Job
-    Job -->|list / download objects| GCS
-    Job -->|upload_to_file_search_store| GenAI
-    GenAI --> Store
-```
+**Flow (summary):** *Infra & CI/CD* — Developer → GitHub → Terraform (state in GCS) and GitHub Actions → images in Artifact Registry → deploy to Cloud Run. *Runtime* — User → UI → Load Balancer / Armor → Cloud Run web app (frontend + API) → File Search queries; Scheduler → Cloud Run Job → GCS documents → upload to File Search store; Gemini model + search/datastore complete the RAG path.
 
 ---
 

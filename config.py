@@ -1,4 +1,4 @@
-"""Configuration for Gemini File Search demo (Developer API)."""
+"""Configuration for Intelligent Document Q&A via Gemini File Search (Developer API)."""
 import os
 import logging
 
