@@ -1,4 +1,4 @@
-"""Configuration for Intelligent Document Q&A via Gemini File Search (Developer API)."""
+"""Env-based config for the web app."""
 import os
 import logging
 

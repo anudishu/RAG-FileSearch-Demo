@@ -1,4 +1,4 @@
-"""Gemini File Search: managed import, chunking, embedding, and retrieval."""
+"""Thin wrapper: File Search store + upload_to_file_search_store + generate_content."""
 from __future__ import annotations
 
 import json
@@ -33,7 +33,6 @@ def _to_jsonable(obj: Any) -> Any:
 
 
 class FileSearchRAG:
-    """Thin wrapper around google-genai File Search stores and generate_content."""
 
     def __init__(self) -> None:
         self._client = None
