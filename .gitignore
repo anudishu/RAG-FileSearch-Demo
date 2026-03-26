@@ -5,3 +5,7 @@ venv/
 .env
 .file_search_store.json
 .DS_Store
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars

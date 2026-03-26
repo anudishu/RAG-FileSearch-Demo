@@ -1,0 +1,32 @@
+project_id = "lyfedge-project"
+region     = "asia-south2"
+
+# Must already exist and contain at least one secret version.
+gemini_api_key_secret_name = "gemini-api-key"
+
+# Build and push both images first, then paste the image URIs below.
+web_image = "asia-south2-docker.pkg.dev/lyfedge-project/rag-filesearch/gemini-file-search-demo:latest"
+job_image = "asia-south2-docker.pkg.dev/lyfedge-project/rag-filesearch/rag-gcs-file-search-sync:latest"
+
+# This value is injected into BOTH the web service and sync job.
+file_search_store_display_name = "Gemini File Search demo"
+
+# Optional: if empty, Terraform uses <reserved-lb-ip>.nip.io
+lb_domain = ""
+
+enable_iap = true
+
+# Fill these from "APIs & Services > Credentials > OAuth 2.0 Client IDs"
+iap_oauth_client_id     = "REPLACE_ME.apps.googleusercontent.com"
+iap_oauth_client_secret = "REPLACE_ME"
+
+# Who can access the app through IAP.
+iap_access_members = [
+  "user:your-email@company.com"
+]
+
+# Optional: sync from GCS more often (default in variables.tf is every 6 hours).
+# Every 10 minutes:
+# scheduler_cron = "*/10 * * * *"
+# Cloud Scheduler region (may differ from Cloud Run; must be a valid Scheduler location).
+# scheduler_region = "asia-south1"

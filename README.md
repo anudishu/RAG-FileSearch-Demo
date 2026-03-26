@@ -1,281 +1,315 @@
-# Intelligent Document Q&A using Gemini File Search
+# Intelligent Document Q&A with Gemini File Search on Google Cloud
 
-**No complicated vector-embedding stack to build or run.** This reference app delivers **question answering over your own documents**: upload files (or sync from Cloud Storage), ask in natural language, and get **answers grounded in that content** via the **[Gemini File Search API](https://ai.google.dev/gemini-api/docs/file-search)** — plus a **Google Cloud** deployment path for the UI and batch sync.
-
-## 🧠 What is Gemini File Search?
-
-Typically, building a RAG application requires immense effort:
-
-1. **Parsing & OCR:** Extracting text from PDFs, Word docs, and Markdown.
-2. **Chunking:** Writing custom logic to split large documents into overlapping semantic blocks.
-3. **Embeddings:** Passing those chunks through an embedding model to convert them into vectors.
-4. **Vector Database:** Provisioning and managing a custom database (like Pinecone, Weaviate, or Firestore Vector Search) to store the embeddings.
-5. **Retrieval Logic:** Writing code to calculate cosine similarity and manually retrieve the top-K chunks to inject into your LLM prompt.
-
-**Gemini File Search handles *all* of the above behind the scenes.**  
-You upload raw documents to a **File Search store**. When you query the Gemini model, you pass the store’s name as a tool. Google chunks, embeds, indexes, retrieves, and can return answers with citations and grounding metadata.
+**Enterprise-ready RAG without building your own chunking, embedding, or vector database.**  
+This repository is a **reference application** for teams that want **natural-language Q&A over their own documents**—upload files through a web UI, or land thousands of files in **Cloud Storage** and let a **Cloud Run Job** keep a **Gemini File Search** store in sync on a schedule. Users query the same knowledge base from the browser; **Google handles parsing, chunking, embeddings, indexing, and retrieval** behind the [Gemini File Search API](https://ai.google.dev/gemini-api/docs/file-search).
 
 ---
 
-## 🏗 System Architecture
+## Table of contents
 
-This repo supports **two ways** to get documents into the same File Search store:
+1. [What this solution is for](#what-this-solution-is-for)
+2. [Why not “classic” DIY RAG?](#why-not-classic-diy-rag)
+3. [Why Gemini File Search](#why-gemini-file-search)
+4. [How organizations typically use it](#how-organizations-typically-use-it)
+5. [Architecture](#architecture)
+6. [Repository layout](#repository-layout)
+7. [Prerequisites](#prerequisites)
+8. [Clone this repository](#clone-this-repository)
+9. [Deploy step by step (Terraform)](#deploy-step-by-step-terraform)
+10. [After deployment](#after-deployment)
+11. [Configuration highlights](#configuration-highlights)
+12. [Troubleshooting](#troubleshooting)
+13. [Security and secrets](#security-and-secrets)
+14. [Local development](#local-development)
+
+---
+
+## What this solution is for
+
+| Audience | Need | What you get |
+|----------|------|----------------|
+| **Product & engineering teams** | Demo or pilot **document Q&A** with minimal ML ops | FastAPI UI + API, same File Search store as batch sync |
+| **Enterprises** | **Many PDFs/DOCX** produced by pipelines, not by hand | **GCS** as the landing zone; **Cloud Run Job** ingests into File Search |
+| **Platform teams** | Secure access behind **Google Cloud** networking | Optional **HTTPS Load Balancer** + **IAP** pattern (as in Terraform) |
+
+If your goal is “users ask questions; answers should come from **our** documents,” this repo shows one complete path on GCP.
+
+---
+
+## Why not “classic” DIY RAG?
+
+A typical custom RAG stack forces you to own:
+
+1. **Parsing & layout** — PDFs, Office, scans.
+2. **Chunking** — overlap, token limits, metadata.
+3. **Embeddings** — model choice, batching, versioning.
+4. **Vector database** — provisioning, scaling, backups, access control.
+5. **Retrieval** — similarity search, re-ranking, prompt assembly.
+
+That is a lot of **custom logic and operational burden**. This project **does not replace** those components with more code—it **delegates** indexing and retrieval to **Gemini File Search**, so your code focuses on **where files come from** (UI, GCS, pipelines) and **how users query** (FastAPI + Gemini tool calling).
+
+---
+
+## Why Gemini File Search
+
+- **Managed RAG pipeline** — Upload or import documents into a **File Search store**; Google performs chunking, embedding, and indexing suitable for retrieval-augmented generation.
+- **Simple application model** — Your app passes the store to the model as a **tool**; the model retrieves relevant material when answering.
+- **Fits “lots of files”** — Pair with **GCS + Cloud Run Job + Cloud Scheduler**: new or updated objects are synced incrementally (this repo’s job uses **MD5-based** `.sync_state.json` in the bucket).
+
+**Isn’t that cool?** Your **data pipeline** (ETL, sync from SharePoint, Drive export jobs, SFTP drops, etc.) only needs to **put files into GCS** (or a path you control). The **same Cloud Run job** can run every **10 minutes** (or any cron) to **embed and index** into File Search, while end users only use the **Q&A app**.
+
+---
+
+## How organizations typically use it
+
+1. **Canonical bucket** — `gs://YOUR_BUCKET/` holds PDF, DOCX, TXT, MD, CSV (see `gcs-sync-job/sync_job.py` for supported types).
+2. **Ingestion** — Anything that can write to GCS works: **Cloud Composer**, **Dataflow**, **scheduled exports**, **CI artifacts**, **manual `gsutil`**, or connectors that sync **Google Drive / OneDrive / SharePoint** into GCS (those are **separate products**; this repo assumes files **arrive in GCS**—you plug your connector or pipeline in front).
+3. **Scheduled indexing** — **Cloud Scheduler** triggers **Cloud Run Job** on a schedule (e.g. **every 10 minutes**: cron `*/10 * * * *`).
+4. **Query** — Users open the **web app** (behind LB + IAP if you use Terraform) and ask questions; the app queries Gemini with **File Search** attached to the **same** store display name as the job.
+
+**Important:** The **Cloud Run service** and **Cloud Run job** must share the same **`FILE_SEARCH_STORE_DISPLAY_NAME`** (and typically the same **Gemini API key** project context) so queries hit the same logical store. Terraform sets one variable for both.
+
+---
+
+## Architecture
+
+End-to-end flow (conceptual):
+
+- **Developers** → Git + **Terraform** (state in a dedicated GCS bucket) → **Artifact Registry** → **Cloud Run**.
+- **Users** → **HTTPS Load Balancer** → (optional **IAP**) → **Cloud Run** web app → **Gemini** + **File Search**.
+- **Scheduler** → **Cloud Run Job** → reads **GCS** → **`upload_to_file_search_store`** → **File Search store**.
+
+![System architecture — Terraform & CI/CD, Cloud Run web app, GCS sync job, Gemini File Search](docs/architecture-gemini-filesearch-rag.png)
+
+**What the diagram shows:** (1) **IaC & CI/CD** — developer → GitHub → Terraform (state in GCS) and GitHub Actions → Artifact Registry → deploy to Cloud Run. (2) **Runtime** — user → Load Balancer → IAP → Cloud Run (FastAPI / UI) → Gemini + File Search for Q&A. (3) **Ingestion** — documents land in **GCS** (users or data pipelines); **Cloud Scheduler** runs the **Cloud Run Job** (`gcs-sync-job`) on a schedule; the job syncs objects into the **managed File Search** store so queries stay aligned with bucket content.
+
+> The Terraform in this repo implements **LB + IAP + Cloud Run service + Cloud Run job + Scheduler + GCS bucket + IAM**; naming and regions may differ from the diagram labels—adjust `infra/terraform` variables for your project.
+
+---
+
+## Repository layout
 
 | Path | Purpose |
-|------|--------|
-| **FastAPI UI / API** (`main.py`) | Interactive upload for demos and ad-hoc files. |
-| **GCS → Cloud Run Job** (`gcs-sync-job/`) | Batch / scheduled sync from a canonical bucket into File Search (embeddings & indexing). |
-
-The diagram below is the **end-to-end reference architecture**: Terraform / GitHub for infra and CI/CD (Artifact Registry → Cloud Run), user traffic through **Load Balancer** (with **Cloud Armor**), the **Cloud Run** web app for uploads and queries, **Cloud Scheduler** driving the **Cloud Run Job** for GCS ingestion, and **Gemini / File Search** for managed indexing and answers.
-
-![Intelligent Document Q&A using Gemini File Search — system architecture](docs/architecture-intelligent-document-qa.png)
-
-**Flow (summary):** *Infra & CI/CD* — Developer → GitHub → Terraform (state in GCS) and GitHub Actions → images in Artifact Registry → deploy to Cloud Run. *Runtime* — User → UI → Load Balancer / Armor → Cloud Run web app (frontend + API) → File Search queries; Scheduler → Cloud Run Job → GCS documents → upload to File Search store; Gemini model + search/datastore complete the RAG path.
+|------|---------|
+| `main.py` | FastAPI app + embedded UI: `/health`, `/api/v1/upload`, `/api/v1/query`, `/api/v1/status` |
+| `file_search_service.py` | File Search store lifecycle, uploads, queries |
+| `config.py` | Environment-based configuration |
+| `gcs-sync-job/` | Cloud Run **Job** image: GCS listing, diff, sync to File Search |
+| `Dockerfile` | Web service container |
+| `infra/terraform/` | **IaC**: Cloud Run service & job, GCS bucket, Scheduler, LB, IAP, IAM, Artifact Registry |
 
 ---
 
-## ❓ Why use a GCS sync job?
+## Prerequisites
 
-1. **Canonical source of truth** — Teams drop PDFs, DOCX, TXT, etc. into **`gs://lyfedge-rag-sync-bucket`** (upload UI, `gsutil`, pipelines). The job is the single pipeline that **embeds and indexes** those objects into File Search.
-2. **No reliance on interactive “agent” quotas** — Tools such as **Antigravity** (or other IDE agents) can hit **daily/API quotas** when they drive uploads repeatedly. A **Cloud Run Job** runs under **your** project controls, on a **schedule** you choose, with predictable batch behavior.
-3. **Incremental sync** — The job stores **MD5 hashes** in **`.sync_state.json`** in the same bucket so only **new or changed** objects are re-indexed; removed GCS objects can be removed from the store.
-4. **Separation of concerns** — The **web app** answers questions; the **job** handles **bulk ingestion** from GCS without keeping long-lived upload sessions in the browser.
+- **Google Cloud project** with billing enabled (as needed for APIs you enable).
+- Tools: **`gcloud`**, **`gsutil`**, **`terraform`** (≥ 1.5).
+- **Gemini API key** ([Google AI Studio](https://aistudio.google.com/apikey) or your approved channel).
+- For Terraform deploy: ability to create **Secret Manager** secrets and **OAuth** credentials for **IAP** (if `enable_iap = true`).
 
 ---
 
-## 🪣 GCS bucket: `lyfedge-rag-sync-bucket`
-
-- **Name (example):** `lyfedge-rag-sync-bucket` — replace with your bucket if different.
-- **Region:** Align with **Cloud Run Job** and **Scheduler** (e.g. `asia-south2`).
-- **Contents:**
-  - **Documents** to index: `pdf`, `doc`, `docx`, `txt`, `md`, `csv` (see `gcs-sync-job/sync_job.py`).
-  - **State object:** `.sync_state.json` (created by the job — maps blob path → MD5; **do not delete** unless you want a full re-sync).
-- **Permissions:** The job’s service account needs at least **`roles/storage.objectViewer`** to read objects and **`roles/storage.objectAdmin`** (or a custom role) to **write** `.sync_state.json`. Narrow to this bucket via a **bucket-level IAM binding** if possible.
-
-Create the bucket (example):
+## Clone this repository
 
 ```bash
-export PROJECT_ID=lyfedge-project
-export REGION=asia-south2
-export BUCKET=lyfedge-rag-sync-bucket
+git clone https://github.com/anudishu/RAG-FileSearch-Demo.git
+cd RAG-FileSearch-Demo
+```
 
+---
+
+## Deploy step by step (Terraform)
+
+Replace project IDs, regions, and bucket names with **your** values. Defaults in Terraform often use `lyfedge-project` and `lyfedge-rag-sync-bucket` as **examples**—change them in `infra/terraform/terraform.tfvars` if you fork for another environment.
+
+### Step 1 — Authenticate and set project
+
+```bash
+gcloud auth login
+gcloud auth application-default login
+export PROJECT_ID="your-project-id"
+export REGION="asia-south2"   # example: align with your Cloud Run region
 gcloud config set project "$PROJECT_ID"
-gsutil mb -p "$PROJECT_ID" -l "$REGION" "gs://$BUCKET"
 ```
 
----
+### Step 2 — Terraform remote state bucket
 
-## ⚙️ Cloud Run Job — `gcs-sync-job/`
-
-Batch container that:
-
-1. Reads **`GCS_BUCKET_NAME`** (use `lyfedge-rag-sync-bucket`).
-2. Loads **`GEMINI_API_KEY`** (from env or Secret Manager).
-3. Resolves or creates a File Search store by **`FILE_SEARCH_STORE_DISPLAY_NAME`** (must match the **same** value you use for the FastAPI app’s `FILE_SEARCH_STORE_DISPLAY_NAME` / store discovery so UI and job share one store).
-4. Downloads **new/changed** blobs (vs `.sync_state.json`), calls **`upload_to_file_search_store`**, waits for the long-running operation.
-5. Deletes **stale** store documents when a blob disappears from GCS.
-6. Writes updated **`.sync_state.json`** back to the bucket.
-
-| File | Role |
-|------|------|
-| `gcs-sync-job/sync_job.py` | Main logic: list GCS, diff MD5, Gemini upload, delete, state. |
-| `gcs-sync-job/Dockerfile` | Python 3.11 image; `CMD ["python", "sync_job.py"]`. |
-| `gcs-sync-job/requirements.txt` | `google-genai>=1.49.0`, `google-cloud-storage>=2.14.0`. |
-
-**Environment variables (job):**
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `GCS_BUCKET_NAME` | Yes | e.g. `lyfedge-rag-sync-bucket` |
-| `GEMINI_API_KEY` | Yes | Gemini Developer API key |
-| `FILE_SEARCH_STORE_DISPLAY_NAME` | No | Default: **`Gemini File Search demo`** — same as `config.py` / Cloud Run **service** (override only if you want a different store). |
-
-**Authentication:** The job uses **API key** for Gemini and the **metadata server / ADC** for GCS via `google-cloud-storage` — run it with a **service account** that has GCS access on the bucket (Cloud Run Job default SA or a dedicated SA).
-
----
-
-## 🚀 Deploy the Cloud Run Job
-
-Prerequisites: APIs enabled — `run.googleapis.com`, `storage.googleapis.com`, `cloudscheduler.googleapis.com`, `secretmanager.googleapis.com` (if using secrets).
+Create a **dedicated bucket** for Terraform state (example name from this project: `rag-system-lyfedge-project`—use your own naming in production):
 
 ```bash
-export PROJECT_ID=lyfedge-project
-export REGION=asia-south2
-export BUCKET=lyfedge-rag-sync-bucket
-export JOB_NAME=rag-gcs-file-search-sync
-export REPO=gcr.io/${PROJECT_ID}/${JOB_NAME}
-
-gcloud config set project "$PROJECT_ID"
-
-# 1) Secret for API key (recommended)
-echo -n "YOUR_GEMINI_API_KEY" | gcloud secrets create gemini-api-key --data-file=- 2>/dev/null \
-  || echo -n "YOUR_GEMINI_API_KEY" | gcloud secrets versions add gemini-api-key --data-file=-
-
-# 2) Dedicated SA (optional but recommended)
-gcloud iam service-accounts create rag-gcs-sync-sa --display-name="RAG GCS File Search sync"
-SYNC_SA="rag-gcs-sync-sa@${PROJECT_ID}.iam.gserviceaccount.com"
-
-gsutil iam ch serviceAccount:${SYNC_SA}:objectViewer "gs://${BUCKET}"
-gsutil iam ch serviceAccount:${SYNC_SA}:objectAdmin "gs://${BUCKET}"
-
-gcloud secrets add-iam-policy-binding gemini-api-key \
-  --member="serviceAccount:${SYNC_SA}" --role="roles/secretmanager.secretAccessor"
-
-# 3) Build image
-cd gcs-sync-job
-gcloud builds submit --tag "$REPO" .
-
-# 4) Create job
-gcloud run jobs create "$JOB_NAME" \
-  --image="$REPO" \
-  --region="$REGION" \
-  --service-account="$SYNC_SA" \
-  --set-env-vars="GCS_BUCKET_NAME=${BUCKET},FILE_SEARCH_STORE_DISPLAY_NAME=Gemini File Search demo" \
-  --set-secrets="GEMINI_API_KEY=gemini-api-key:latest" \
-  --max-retries=1 \
-  --task-timeout=30m
-
-# 5) Run once manually
-gcloud run jobs execute "$JOB_NAME" --region="$REGION" --wait
+export TFSTATE_BUCKET="your-tfstate-bucket"
+gsutil ls "gs://${TFSTATE_BUCKET}" >/dev/null 2>&1 || \
+  gsutil mb -p "$PROJECT_ID" -l "$REGION" "gs://${TFSTATE_BUCKET}"
 ```
 
-Adjust `FILE_SEARCH_STORE_DISPLAY_NAME` to match your FastAPI / store naming. For a quick test only, you may use `--set-env-vars=GEMINI_API_KEY=...` instead of secrets (not recommended for production).
-
----
-
-## ⏰ Cloud Scheduler — run the job on a schedule
-
-Cloud Scheduler calls the **Cloud Run Jobs API** to **execute** the job (replace placeholders):
+### Step 3 — Store the Gemini API key in Secret Manager
 
 ```bash
-export PROJECT_ID=lyfedge-project
-export REGION=asia-south2
-export JOB_NAME=rag-gcs-file-search-sync
-export SCHEDULER_SA=scheduler-invoker@${PROJECT_ID}.iam.gserviceaccount.com
-
-gcloud iam service-accounts create scheduler-invoker --display-name="Run Cloud Run Jobs from Scheduler"
-
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-  --member="serviceAccount:${SCHEDULER_SA}" \
-  --role="roles/run.developer"
-
-# Every 6 hours (cron)
-gcloud scheduler jobs create http "${JOB_NAME}-schedule" \
-  --location="$REGION" \
-  --schedule="0 */6 * * *" \
-  --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${JOB_NAME}:run" \
-  --http-method=POST \
-  --oauth-service-account-email="$SCHEDULER_SA"
+echo -n "YOUR_GEMINI_API_KEY" | gcloud secrets create gemini-api-key --data-file=- 2>/dev/null || \
+echo -n "YOUR_GEMINI_API_KEY" | gcloud secrets versions add gemini-api-key --data-file=-
 ```
 
-**Note:** Exact Scheduler → Run Job wiring can vary slightly by API version; if the URI above fails, use the **“Create scheduler job”** flow in Cloud Console for **Cloud Run job** targets, or see [Run jobs on a schedule](https://cloud.google.com/run/docs/execute/jobs#schedule).
+Never commit API keys or OAuth secrets to git.
+
+### Step 4 — OAuth client for IAP (manual in Console)
+
+1. Open **Google Cloud Console** → your project.
+2. **Security → Identity-Aware Proxy** (or **APIs & Services → Credentials** for a Web client, per org policy).
+3. Complete **OAuth consent screen** if prompted.
+4. Create or select an OAuth **Web application** client used with IAP.
+5. Copy **Client ID** and **Client secret** into `terraform.tfvars` (see below).
+
+### Step 5 — Build and push container images
+
+**Option A — Cloud Build** (no local Docker required):
+
+```bash
+export REPO="${REGION}-docker.pkg.dev/${PROJECT_ID}/rag-filesearch"
+gcloud artifacts repositories create rag-filesearch \
+  --repository-format=docker --location="$REGION" 2>/dev/null || true
+
+gcloud builds submit --tag "${REPO}/gemini-file-search-demo:latest" .
+gcloud builds submit --tag "${REPO}/rag-gcs-file-search-sync:latest" ./gcs-sync-job
+```
+
+**Option B — Local Docker** — build and push the same tags to Artifact Registry.
+
+### Step 6 — Configure Terraform variables
+
+```bash
+cd infra/terraform
+cp terraform.tfvars.example terraform.tfvars
+```
+
+Edit **`terraform.tfvars`** (this file is **gitignored**—do not commit secrets):
+
+| Variable | Purpose |
+|----------|---------|
+| `project_id`, `region` | GCP project and primary region |
+| `web_image`, `job_image` | Full image URIs from Step 5 |
+| `gemini_api_key_secret_name` | Usually `gemini-api-key` |
+| `file_search_store_display_name` | **Same value** for web + job (shared store) |
+| `iap_oauth_client_id`, `iap_oauth_client_secret` | From Step 4 (if IAP enabled) |
+| `iap_access_members` | Who may access the app via IAP |
+| `scheduler_cron` | Default is every 6 hours; use **`*/10 * * * *`** for every **10 minutes** |
+| `scheduler_region` | Cloud Scheduler location (some regions cannot host Scheduler; default in code is `asia-south1`) |
+
+### Step 7 — Initialize and apply Terraform
+
+Backend uses GCS; pass an access token if your environment needs user credentials for the backend:
+
+```bash
+export GOOGLE_OAUTH_ACCESS_TOKEN="$(gcloud auth print-access-token)"
+terraform init -reconfigure \
+  -backend-config="bucket=${TFSTATE_BUCKET}" \
+  -backend-config="prefix=rag-filesearch/terraform" \
+  -backend-config="access_token=${GOOGLE_OAUTH_ACCESS_TOKEN}"
+
+terraform plan
+terraform apply
+```
+
+### Step 8 — Read outputs
+
+```bash
+terraform output app_url
+terraform output reserved_lb_ip
+terraform output lb_domain
+terraform output shared_file_search_store_display_name
+```
+
+Open **`app_url`** in a browser (HTTPS). If IAP is on, sign in with an allowed account.
 
 ---
 
-## 📁 File structure
+## After deployment
 
-| Path | Role |
-|------|------|
-| `main.py` | FastAPI app, embedded UI, `/health`, `/api/v1/upload`, `/api/v1/query`, `/api/v1/status`. |
-| `file_search_service.py` | `FileSearchRAG`: store lifecycle, `upload_to_file_search_store`, queries + citations. |
-| `config.py` | Env-based config (`GEMINI_API_KEY`, `GEMINI_MODEL`, `FILE_SEARCH_STORE_*`, allowed extensions). |
-| `gcs-sync-job/sync_job.py` | GCS ↔ File Search sync job (MD5 state, deletes, `upload_to_file_search_store`). |
-| `gcs-sync-job/Dockerfile` | Container image for the job. |
-| `gcs-sync-job/requirements.txt` | Job dependencies. |
-| `Dockerfile` (repo root) | Web service image for Cloud Run **service**. |
-| `requirements.txt` | Web app dependencies. |
+### Test the web UI
+
+- Upload a small PDF or TXT via the UI.
+- Ask a question whose answer appears only in that document.
+
+### Test GCS → Job → same store
+
+```bash
+export BUCKET="lyfedge-rag-sync-bucket"   # or your bucket name from Terraform
+gsutil cp ./sample.pdf "gs://${BUCKET}/"
+
+gcloud run jobs execute rag-gcs-file-search-sync --region="$REGION" --wait
+```
+
+Then query from the app **without** uploading the same file in the UI—answers should reflect GCS-ingested content if the job succeeded.
+
+### Run Cloud Scheduler on demand
+
+```bash
+# Scheduler region may differ from Cloud Run (see terraform.tfvars / variables.tf)
+gcloud scheduler jobs run rag-gcs-file-search-sync-schedule --location=asia-south1
+```
+
+### Verify shared File Search store name
+
+Both the Cloud Run **service** and **job** must expose the same `FILE_SEARCH_STORE_DISPLAY_NAME`. Confirm in Console or:
+
+```bash
+terraform state show google_cloud_run_v2_service.web
+terraform state show google_cloud_run_v2_job.sync
+```
 
 ---
 
-## 🚀 Local run (web app)
+## Configuration highlights
+
+| Topic | Notes |
+|-------|--------|
+| **Same store for UI + job** | Set one `file_search_store_display_name` in Terraform; it is injected into both workloads. |
+| **Schedule** | Adjust `scheduler_cron` (e.g. `*/10 * * * *` every 10 minutes). |
+| **Bucket name** | Override `gcs_bucket_name` in Terraform if you do not use the default. |
+| **IAP** | Set `enable_iap = false` only if you accept a different access pattern (not recommended for public internet). |
+
+---
+
+## Troubleshooting
+
+| Symptom | What to check |
+|---------|----------------|
+| **503 / API key not configured** | Secret exists; Cloud Run service account has `secretAccessor` on the secret. |
+| **Query ignores a new GCS file** | Job execution logs; `.sync_state.json` in bucket; file extension allowed in `sync_job.py`. |
+| **Wrong resume / name mismatch** | **Filename ≠ indexed text**—ensure the document body contains the names/terms you query (e.g. “Abhishek”) or ask using phrases that appear in the file. |
+| **HTTPS / certificate** | Managed cert `ACTIVE` in Console; use `https://` URL from Terraform output. |
+| **Scheduler errors** | Scheduler **region** must be valid for Cloud Scheduler; it can differ from Cloud Run region. |
+
+---
+
+## Security and secrets
+
+- **Never** commit `terraform.tfvars`, `.env`, or API keys.
+- Add `terraform.tfvars` to `.gitignore` (already in this repo).
+- Rotate **Gemini** and **OAuth** credentials if they were ever pasted in chat or logs.
+- Prefer **least-privilege** IAM on the GCS bucket and Secret Manager.
+
+---
+
+## Local development
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -U -r requirements.txt
-export GEMINI_API_KEY="your-api-key-here"
+export GEMINI_API_KEY="your-api-key"
 python main.py
 ```
 
-Open **http://127.0.0.1:8080**.
+Open **http://127.0.0.1:8080** (or the port printed in logs).
 
-**Troubleshooting (venv):** use `python -m pip install …` with the same interpreter that runs `main.py`. **`google-genai>=1.49.0`** is required for File Search; **`fastapi>=0.115`** avoids `anyio` conflicts with `google-genai`.
-
----
-
-## ☁️ Cloud Run service + IAP (web UI)
-
-Running the UI publicly is often locked down with **Identity-Aware Proxy (IAP)** in front of a load balancer.
-
-### Step 1: Deploy the Cloud Run **service** (repo root, not `gcs-sync-job/`)
-
-```bash
-gcloud run deploy gemini-file-search-demo \
-  --source . \
-  --region=asia-south2 \
-  --allow-unauthenticated \
-  --ingress=internal-and-cloud-load-balancing \
-  --set-env-vars="GEMINI_API_KEY=YOUR_API_KEY_HERE,FILE_SEARCH_STORE_DISPLAY_NAME=Gemini File Search demo"
-```
-
-Use **Secret Manager** for `GEMINI_API_KEY` in production. Keep **`FILE_SEARCH_STORE_DISPLAY_NAME`** aligned with the **GCS sync job** so both target the same logical store.
-
-### Step 2: Load balancer + NEG (outline)
-
-```bash
-IP_ADDRESS="34.149.147.50"   # your reserved global IP
-DOMAIN="${IP_ADDRESS}.nip.io"
-REGION="asia-south2"
-
-gcloud compute network-endpoint-groups create demo-neg \
-    --region=$REGION \
-    --network-endpoint-type=serverless \
-    --cloud-run-service=gemini-file-search-demo
-
-gcloud compute backend-services create demo-backend \
-    --global \
-    --load-balancing-scheme=EXTERNAL_MANAGED
-
-gcloud compute backend-services add-backend demo-backend \
-    --global \
-    --network-endpoint-group=demo-neg \
-    --network-endpoint-group-region=$REGION
-
-gcloud compute url-maps create demo-url-map --default-service demo-backend
-gcloud compute ssl-certificates create demo-cert --domains=$DOMAIN --global
-gcloud compute target-https-proxies create demo-https-proxy \
-  --url-map=demo-url-map --ssl-certificates=demo-cert
-gcloud compute forwarding-rules create demo-https-rule \
-  --load-balancing-scheme=EXTERNAL_MANAGED --network-tier=PREMIUM \
-  --address=$IP_ADDRESS --target-https-proxy=demo-https-proxy --global --ports=443
-```
-
-### Step 3: IAP
-
-Configure **OAuth consent** and a **Web client** in Google Cloud Console, then:
-
-```bash
-gcloud compute backend-services update demo-backend \
-    --global \
-    --iap=enabled,oauth2-client-id="YOUR_CLIENT_ID",oauth2-client-secret="YOUR_CLIENT_SECRET"
-
-gcloud beta services identity create --service=iap.googleapis.com --project=YOUR_PROJECT_ID
-gcloud run services add-iam-policy-binding gemini-file-search-demo \
-    --region=$REGION \
-    --member="serviceAccount:service-YOUR_PROJECT_NUMBER@gcp-sa-iap.iam.gserviceaccount.com" \
-    --role="roles/run.invoker"
-
-gcloud iap web add-iam-policy-binding \
-    --resource-type=backend-services \
-    --service=demo-backend \
-    --member="user:your-email@gmail.com" \
-    --role="roles/iap.httpsResourceAccessor"
-```
-
-Allow time for the managed certificate, then open `https://[IP].nip.io` and sign in with Google.
+Requirements: **`google-genai>=1.49.0`** for File Search; **`fastapi>=0.115`** avoids common `anyio` conflicts.
 
 ---
 
-## 📝 Notes on quotas (e.g. Antigravity)
+## License and contributions
 
-If you were using **Antigravity** or similar tools to drive uploads and hit **quota limits**, moving **bulk indexing** to **GCS + Cloud Run Job + Scheduler** avoids tying ingestion to those interactive limits. You still consume **Gemini / File Search billing** for indexing and queries; monitor usage in **Google AI Studio** and **Cloud Billing**.
+This repository is intended as a **reference implementation** for demos and pilots. Adapt naming, regions, and security controls to your organization’s standards.
+
+---
+
+**Summary:** Clone the repo, push images, configure Terraform with your project and secrets, apply, then use **either** interactive upload **or** GCS + scheduled jobs to keep **one** Gemini File Search store fresh—**without** maintaining your own vector database or embedding pipeline.
