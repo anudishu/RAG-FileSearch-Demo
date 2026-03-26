@@ -14,7 +14,13 @@ Small FastAPI app plus a batch job: upload docs (or drop them in GCS), ask quest
 
 ![overview](docs/architecture-gemini-filesearch-rag.png)
 
-Rough flow: Terraform/CI builds images → Cloud Run serves the app. Users hit the load balancer (IAP if enabled) → FastAPI → Gemini + File Search. Scheduler kicks the sync job on a cron; the job reads GCS and calls `upload_to_file_search_store`. Same `FILE_SEARCH_STORE_DISPLAY_NAME` on the service and the job so both sides talk to one store.
+Flow in practice:
+
+- Build/push images (Terraform in this repo, or your own CI) and run them on Cloud Run.
+- Traffic: internet → HTTPS load balancer → (optional IAP) → Cloud Run service running FastAPI.
+- Queries go to Gemini with File Search pointed at your store.
+- On a schedule, Cloud Scheduler starts the sync job; the job walks the GCS bucket and calls `upload_to_file_search_store` for new/changed objects.
+- Web service and sync job both use the same `FILE_SEARCH_STORE_DISPLAY_NAME` so you are not querying a different store than the one the job fills.
 
 ---
 
